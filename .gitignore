@@ -52,7 +52,4 @@ venv/
 ENV/
 .spyderproject
 .ropeproject
-.gitignore
 .idea/
-downloader.py
-input.txt
