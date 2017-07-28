@@ -80,14 +80,14 @@ class DownloadableEntry:
         return self.isSuccess
 
     def __str__(self):
-        return 'DownloadableEntry ({url}, {success}, {error})'.format(
-            url=self.url, success=self.isSuccess, error=self.error
+        return 'DownloadableEntry ({url}, {isSuccess}, {error})'.format(
+            url=self.url, isSuccess=self.isSuccess, error=self.error
         )
 
 
 class DownloaderThread(threading.Thread):
     def __init__(self, queue, report):
-        super().__init__(self)
+        super().__init__()
         self.queue = queue
         self.report = report
 
@@ -118,7 +118,7 @@ class Downloader:
         self.limit = limit
 
         for url, filename in urls_and_filenames:
-            self.queue.put(DownloadableEntry(url, filename, self.url_tries))
+            self.queue.put(DownloadableEntry(url, filename, self.output, self.url_tries))
 
     def run(self):
         for i in range(self.thread_number):
@@ -134,9 +134,6 @@ def main():
 
     if args.file is None:
         raise ValueError('input file is not specified')
-
-    if not os.path.exists(args.file):
-        raise FileExistsError('input file not found')
 
     urls_and_filenames = [tuple(line.split(' ')) for line in args.file]
 
