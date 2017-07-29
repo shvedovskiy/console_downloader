@@ -27,6 +27,7 @@ def parse_args():
         '-l',
         '--limit',
         nargs='?',
+        default='0',
         help='download speed limit'
     )
 
@@ -137,21 +138,26 @@ def main():
 
     urls_and_filenames = [tuple(line.split(' ')) for line in args.file]
 
+    number_of_threads = args.number if args.number else 1
+
     if not os.path.exists(args.output):
         os.makedirs(args.output)
 
-    limit = args.limit
-    if limit:
-        suffix = limit[-1]
+    if args.limit:
+        suffix = args.limit[-1]
         if suffix.isalpha():
-            if suffix == 'k':
-                limit *= 1024
-            elif suffix == 'm':
-                limit *= 1048576
+            if suffix == 'k' and args.limit[-2].isdigit():
+                limit = int(args.limit[:-1]) * 1024
+            elif suffix == 'm' and args.limit[-2].isdigit():
+                limit = int(args.limit[:-1]) * 1048576
             else:
                 raise ValueError('wrong speed limit value')
+        else:
+            limit = int(args.limit)
+    else:
+        limit = 0
 
-    downloader = Downloader(urls_and_filenames, args.output, args.number, limit)
+    downloader = Downloader(urls_and_filenames, args.output, number_of_threads, limit)
 
     print('Downloading {} files'.format(len(urls_and_filenames)))
     downloader.run()
