@@ -1,10 +1,17 @@
 import os
+import re
 import argparse
 import shutil
 import threading
+import click
+import requests
 
 from urllib import request
 from queue import Queue
+
+import sys
+
+import time
 
 
 def parse_args():
@@ -61,22 +68,38 @@ class DownloadableEntry:
         self.isSuccess = False
         self.error = None
 
-    def download(self):
+    def download(self, limit):
         self.url_tried += 1
         output_file_path = os.path.join(self.output_dir, self.filename)
 
         if os.path.exists(output_file_path):
             self.isSuccess = True
         else:
-            with open(output_file_path, 'wb') as output_file:
-                try:
-                    response = request.urlopen(self.url)
-                except request.URLError as e:
-                    self.error = e
-                else:
-                    if response is not None:
-                        shutil.copyfileobj(response, output_file)
-                        self.isSuccess = True
+            try:
+                # response = request.urlopen(self.url)
+                response = requests.get(self.url, stream=True)
+            except requests.RequestException as e:
+                self.error = e
+            else:
+                with open(output_file_path, 'wb') as output_file:
+                    total_length = response.headers.get('content-length')
+                    if total_length is None:
+                        output_file.write(response.content)
+                    else:
+                        data_length = 0
+                        total_length = int(total_length)
+                        for chunk in response.iter_content(chunk_size=4096):
+                            if chunk:
+                                data_length += len(chunk)
+                                output_file.write(chunk)
+                                done = int(50 * data_length / total_length)
+                                sys.stdout.write('\r[{}{}]'.format('=' * done, ' ' * (50 - done)))
+                                sys.stdout.flush()
+                    # for chunk in response.iter_content(chunk_size=1024):
+                    #     if chunk:
+                    #         output_file.write(chunk)
+                    #         # shutil.copyfileobj(chunk, output_file)
+                self.isSuccess = True
 
         return self.isSuccess
 
@@ -87,15 +110,16 @@ class DownloadableEntry:
 
 
 class DownloaderThread(threading.Thread):
-    def __init__(self, queue, report):
+    def __init__(self, queue, report, limit):
         super().__init__()
         self.queue = queue
         self.report = report
+        self.limit = limit
 
     def run(self):
         while not self.queue.empty():
             entry = self.queue.get()
-            response = entry.download()
+            response = entry.download(self.limit)
 
             if not response:
                 if entry.url_tried < entry.url_tries:
@@ -122,8 +146,13 @@ class Downloader:
             self.queue.put(DownloadableEntry(url, filename, self.output, self.url_tries))
 
     def run(self):
+        if self.limit and self.limit > 0:
+            thread_limit = self.limit // self.thread_number
+        else:
+            thread_limit = 0
+
         for i in range(self.thread_number):
-            thread = DownloaderThread(self.queue, self.report)
+            thread = DownloaderThread(self.queue, self.report, thread_limit)
             thread.start()
             self.threads.append(thread)
         if self.queue.qsize() > 0:
@@ -144,16 +173,18 @@ def main():
         os.makedirs(args.output)
 
     if args.limit:
-        suffix = args.limit[-1]
-        if suffix.isalpha():
-            if suffix == 'k' and args.limit[-2].isdigit():
+        if args.limit.isdigit():
+            limit = int(args.limit)
+        elif re.match(r'^\d+\w$', args.limit):
+            suffix = args.limit[-1]
+            if suffix == 'k':
                 limit = int(args.limit[:-1]) * 1024
-            elif suffix == 'm' and args.limit[-2].isdigit():
+            elif suffix == 'm':
                 limit = int(args.limit[:-1]) * 1048576
             else:
-                raise ValueError('wrong speed limit value')
+                raise ValueError('unrecognized speed limit suffix')
         else:
-            limit = int(args.limit)
+            raise ValueError('wrong speed limit value')
     else:
         limit = 0
 
@@ -161,7 +192,9 @@ def main():
 
     print('Downloading {} files'.format(len(urls_and_filenames)))
     downloader.run()
-    print('Downloaded {} of {}'.format(len(downloader.report['success']), len(urls_and_filenames)))
+    while threading.active_count() > 1:
+        time.sleep(1)
+    print('\nDownloaded {} of {}'.format(len(downloader.report['success']), len(urls_and_filenames)))
 
     if len(downloader.report['failure']) > 0:
         print('\nFailed urls:')
