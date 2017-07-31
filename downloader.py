@@ -1,17 +1,14 @@
 import os
+import sys
 import re
+import time
 import argparse
 import shutil
 import threading
-import click
 import requests
 
-from urllib import request
 from queue import Queue
-
-import sys
-
-import time
+from functools import reduce
 
 
 def parse_args():
@@ -71,12 +68,12 @@ class DownloadableEntry:
     def download(self, limit):
         self.url_tried += 1
         output_file_path = os.path.join(self.output_dir, self.filename)
+        total_length = 0
 
         if os.path.exists(output_file_path):
             self.isSuccess = True
         else:
             try:
-                # response = request.urlopen(self.url)
                 response = requests.get(self.url, stream=True)
             except requests.RequestException as e:
                 self.error = e
@@ -86,22 +83,20 @@ class DownloadableEntry:
                     if total_length is None:
                         output_file.write(response.content)
                     else:
+                        print("Downloading: {}, {} bytes".format(self.filename, total_length))
                         data_length = 0
                         total_length = int(total_length)
                         for chunk in response.iter_content(chunk_size=4096):
-                            if chunk:
-                                data_length += len(chunk)
-                                output_file.write(chunk)
-                                done = int(50 * data_length / total_length)
-                                sys.stdout.write('\r[{}{}]'.format('=' * done, ' ' * (50 - done)))
-                                sys.stdout.flush()
-                    # for chunk in response.iter_content(chunk_size=1024):
-                    #     if chunk:
-                    #         output_file.write(chunk)
-                    #         # shutil.copyfileobj(chunk, output_file)
+                            if not chunk:
+                                break
+                            data_length += len(chunk)
+                            output_file.write(chunk)
+                            done = int(50 * data_length / total_length)
+                            sys.stdout.write('\r[{}{}]'.format('=' * done, ' ' * (50 - done)))
+                            sys.stdout.flush()
                 self.isSuccess = True
 
-        return self.isSuccess
+        return self.isSuccess, total_length
 
     def __str__(self):
         return 'DownloadableEntry ({url}, {isSuccess}, {error})'.format(
@@ -110,16 +105,17 @@ class DownloadableEntry:
 
 
 class DownloaderThread(threading.Thread):
-    def __init__(self, queue, report, limit):
+    def __init__(self, queue, report, limit, total_length):
         super().__init__()
         self.queue = queue
         self.report = report
         self.limit = limit
+        self.total_length = total_length
 
     def run(self):
         while not self.queue.empty():
             entry = self.queue.get()
-            response = entry.download(self.limit)
+            response, length = entry.download(self.limit)
 
             if not response:
                 if entry.url_tried < entry.url_tries:
@@ -127,6 +123,7 @@ class DownloaderThread(threading.Thread):
                 else:
                     self.report['failure'].append(entry)
             else:
+                self.total_length.append(length)
                 self.report['success'].append(entry)
 
             self.queue.task_done()
@@ -138,6 +135,7 @@ class Downloader:
         self.queue = Queue(0)
         self.report = {'success': [], 'failure': []}
         self.threads = []
+        self.total_length = []
         self.output = output
         self.url_tries = 3
         self.limit = limit
@@ -152,7 +150,9 @@ class Downloader:
             thread_limit = 0
 
         for i in range(self.thread_number):
-            thread = DownloaderThread(self.queue, self.report, thread_limit)
+            thread = DownloaderThread(
+                self.queue, self.report, thread_limit, self.total_length
+            )
             thread.start()
             self.threads.append(thread)
         if self.queue.qsize() > 0:
@@ -191,10 +191,17 @@ def main():
     downloader = Downloader(urls_and_filenames, args.output, number_of_threads, limit)
 
     print('Downloading {} files'.format(len(urls_and_filenames)))
+    start_time = time.time()
     downloader.run()
     while threading.active_count() > 1:
         time.sleep(1)
-    print('\nDownloaded {} of {}'.format(len(downloader.report['success']), len(urls_and_filenames)))
+    print('\nDownloaded {} of {}'.format(
+        len(downloader.report['success']), len(urls_and_filenames))
+    )
+    print('Time Elapsed: {:.2f} seconds'.format(time.time() - start_time))
+    print('Summary amount of downloaded files: {} bytes'.format(
+        reduce((lambda x, y: x + y), downloader.total_length))
+    )
 
     if len(downloader.report['failure']) > 0:
         print('\nFailed urls:')
